@@ -1,47 +1,29 @@
-import zipfile
-import pandas as pd
+import geopandas as gpd
 
-# Update this path to point to your downloaded Census Place summary zip file
-# (e.g., the mobile or fixed Census Place zip you downloaded for New Mexico)
-census_place_zip = r"C:\Users\zack\Documents\ECE220\Project\FCC data\bdc_35_mobile_broadband_summary_by_geography_place_D25_29sep2026.zip"
-provider_list_zip = r"C:\Users\zack\Documents\ECE220\Project\FCC data\bdc_us_provider_list_D25_29sep2026.zip"
-output_csv_path = r"C:\Users\zack\Documents\ECE220\Project\four_towns_census_places.csv"
+# 1. Load the shapefile (point to your .shp file)
+shapefile_path = "C:\\Users\\zack\\Documents\\ECE220\\Project\\FCC data\\extracted_mobile_shapefile\\bdc_35_5GNR_mobile_broadband_h3_D25_29sep2026.shp"
+gdf = gpd.read_file(shapefile_path)
 
-print("1. Loading Census Place summary data...")
-with zipfile.ZipFile(census_place_zip, "r") as z:
-  with z.open(z.namelist()[0]) as f:
-    df_census = pd.read_csv(f, encoding="latin-1")
+# 2. Check the columns in the shapefile
+print("--- Shapefile Columns ---")
+print(gdf.columns.tolist())
 
-# Filter strictly for your 4 towns
-target_towns = ["Taos", "Bloomfield", "Chama", "Cuba"]
-pattern = "|".join(target_towns)
+# 3. Search for '5g' or '500' in the columns/contents
+print("\n--- Searching for 5G / 500 ---")
+found = False
+for col in gdf.columns:
+    matches = gdf[gdf[col].astype(str).str.contains('5g|500', case=False, na=False)]
+    if not matches.empty:
+        found = True
+        print(f"Found matches in column: {col}")
 
-df_towns = df_census[
-    df_census["geography_desc"].astype(str).str.contains(pattern, case=False, na=False)
-].copy()
+if not found:
+    print("No matches for '5g' or '500' found.")
 
-print(f"-> Found {len(df_towns)} geographic entries for your 4 towns.")
+# 4. Convert and save the shapefile as a CSV
+# (Note: If the shapefile contains geometry polygons/points, you might want to drop geometry or convert it to WKT text first)
+gdf_no_geom = gdf.drop(columns='geometry') # Drops the spatial map shapes for a clean table
+output_csv = "converted_file.csv"
+gdf_no_geom.to_csv(output_csv, index=False)
 
-print("2. Loading Master Provider List...")
-with zipfile.ZipFile(provider_list_zip, "r") as z:
-  with z.open(z.namelist()[0]) as f:
-    df_providers = pd.read_csv(f, encoding="latin-1")
-
-print("3. Merging with Master Provider List...")
-# Check if provider_id is in the census file, otherwise join via available keys
-if "provider_id" in df_towns.columns:
-  df_final = pd.merge(df_towns, df_providers, on="provider_id", how="inner")
-else:
-  # If the census place file doesn't have provider_id, print columns to inspect
-  print(
-      "Notice: 'provider_id' not directly in census file. Columns are:"
-      f" {df_towns.columns.tolist()}"
-  )
-  df_final = df_towns
-
-# Save and export
-df_final.to_csv(output_csv_path, index=False)
-print(f"\nSaved successfully to:\n{output_csv_path}")
-
-print("\nPreview of towns found:")
-print(df_final[["geography_desc"]].drop_duplicates())
+print(f"\nSuccessfully converted shapefile to CSV: {output_csv}")
