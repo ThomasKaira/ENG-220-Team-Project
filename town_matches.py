@@ -1,157 +1,102 @@
-import csv
-import geopandas as gpd
+import zipfile
 import pandas as pd
-import requests
+import os
 
-# --- PART 1: Fetch data from the API and save to CSV ---
-API_KEY = "bbm_live_1qkwcDSAM1ROSiuuWbWiN3OrokOksQrhIjori_8LrqU"
+# 1. Define file paths for your zip archives and output CSV
+mobile_summary_zip = r"C:\Users\zack\Documents\ECE220\Project\FCC data\bdc_35_mobile_broadband_summary_by_geography_place_D25_29sep2026.zip" 
+provider_summary_zip = r"C:\Users\zack\Documents\ECE220\Project\FCC data\bdc_us_provider_summary_by_geography_D25_29sep2026.zip" 
+provider_list_zip = r"C:\Users\zack\Documents\ECE220\Project\FCC data\bdc_us_provider_list_D25_29sep2026.zip" 
 
-# Representative coordinates for your target towns
-target_towns = [
-    {"name": "Taos", "lat": 36.4072, "lng": -105.5734},
-    {"name": "Chama", "lat": 36.8973, "lng": -106.5778},
-    {"name": "Bloomfield", "lat": 36.7084, "lng": -107.9906},
-    {"name": "Cuba", "lat": 36.0247, "lng": -106.9453},
+output_csv_path = r"C:\Users\zack\Documents\ECE220\Project\FCC data\filtered_towns_merged_broadband_data.csv"
+
+# 2. Helper function to read the first CSV inside a zip file
+def read_csv_from_zip(zip_path):
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        csv_files = [f for f in z.namelist() if f.endswith('.csv')]
+        if not csv_files:
+            raise ValueError(f"No CSV file found inside {zip_path}")
+        with z.open(csv_files[0]) as f:
+            return pd.read_csv(f)
+
+print("Loading datasets from ZIP archives...")
+df_mobile_summary = read_csv_from_zip(mobile_summary_zip)
+df_provider_summary = read_csv_from_zip(provider_summary_zip)
+df_provider_list = read_csv_from_zip(provider_list_zip)
+
+# 3. Keep requested columns from the mobile broadband summary (including 'geography_desc' if present for filtering)
+mobile_cols_to_keep = [
+    'geography_id',
+    'geography_desc',
+    'mobilebb_4g_area_st_pct',
+    'mobilebb_4g_area_iv_pct',
+    'mobilebb_5g_spd1_area_st_pct',
+    'mobilebb_5g_spd1_area_iv_pct',
+    'mobilebb_5g_spd2_area_st_pct',
+    'mobilebb_5g_spd2_area_iv_pct'
 ]
+existing_mobile_cols = [c for c in mobile_cols_to_keep if c in df_mobile_summary.columns]
+df_mobile_trimmed = df_mobile_summary[existing_mobile_cols]
 
-csv_filename = r"C:\Users\zack\Documents\ECE220\Project\broadband_providers.csv"
+# 4. Keep ONLY geography_id and provider_id from the Provider Summary file
+provider_summary_cols = ['geography_id', 'provider_id']
+existing_summary_cols = [c for c in provider_summary_cols if c in df_provider_summary.columns]
+df_provider_summary_trimmed = df_provider_summary[existing_summary_cols]
 
-print("Starting multi-town API data pull...")
-with open(csv_filename, "w", newline="", encoding="utf-8") as f:
-  writer = csv.writer(f)
-  writer.writerow(
-      [
-          "town_queried",
-          "long",
-          "lat",
-          "provider",
-          "technology",
-          "h3",
-          "up",
-          "down",
-      ]
-  )
-
-  for town in target_towns:
-    town_name = town["name"]
-    lat = town["lat"]
-    lng = town["lng"]
-
-    print(f"Fetching data for {town_name} (lat: {lat}, lng: {lng})...")
-    url = f"https://broadbandmap.com/api/v1/location/internet?lat={lat}&lng={lng}"
-    headers = {"Authorization": f"Bearer {API_KEY}"}
-
-    try:
-      response = requests.get(url, headers=headers)
-
-      if response.status_code == 200:
-        data = response.json()
-        lat_val = data.get("lat")
-        lng_val = data.get("lng")
-        h3_val = data.get("h3_hex")
-
-        providers = data.get("providers", [])
-        print(f" -> Found {len(providers)} providers for {town_name}.")
-
-        for provider in providers:
-          provider_name = provider.get("name")
-          technology = provider.get("technology")
-          max_down = provider.get("max_download_mbps")
-          max_up = provider.get("max_upload_mbps")
-
-          writer.writerow(
-              [
-                  town_name,
-                  lng_val,
-                  lat_val,
-                  provider_name,
-                  technology,
-                  h3_val,
-                  max_up,
-                  max_down,
-              ]
-          )
-      else:
-        print(
-            f" -> Error {response.status_code} for {town_name}:"
-            f" {response.text}"
-        )
-
-    except Exception as e:
-      print(f" -> An error occurred while fetching {town_name}: {e}")
-
-print(f"\nAPI data pulled and saved to {csv_filename}")
-
-
-# --- PART 2: Merge with Official US Census Places (with a buffer) ---
-print("\nDownloading official US Census TIGER/Line Places for New Mexico...")
-url_census = (
-    "https://www2.census.gov/geo/tiger/TIGER2018/PLACE/tl_2018_35_place.zip"
-)
-gdf_places = gpd.read_file(url_census)
-
-# Ensure standard WGS84 coordinate reference system (EPSG:4326)
-if gdf_places.crs is None:
-  gdf_places = gdf_places.set_crs("EPSG:4326")
-elif gdf_places.crs != "EPSG:4326":
-  gdf_places = gdf_places.to_crs("EPSG:4326")
-
-# Define target towns (including misspellings from notes)
-target_variants = [
-    "Taos",
-    "Toas",
-    "Bloomfield",
-    "Bloomsfield",
-    "Chama",
-    "Chana",
-    "Cuba",
-]
-pattern = "|".join(target_variants)
-
-# Filter the Census places layer to target towns
-gdf_geog = gdf_places[
-    gdf_places["NAME"].astype(str).str.contains(pattern, case=False, na=False)
-].copy()
-
-# Project to a metric CRS temporarily, add a 500-meter buffer, then convert back
-# This prevents points right on the edge from being discarded by spatial joins.
-gdf_geog_projected = gdf_geog.to_crs(epsg=3857)  # Web Mercator (meters)
-gdf_geog_projected["geometry"] = gdf_geog_projected["geometry"].buffer(500)
-gdf_geog = gdf_geog_projected.to_crs(epsg=4326)
-
-print("\nTown polygons successfully buffered and found:")
-print(gdf_geog[["NAME", "GEOID"]])
-
-# Load the broadband providers CSV we just generated
-print("\nReading Broadband Providers CSV data for spatial join...")
-df_broadband = pd.read_csv(csv_filename)
-
-# Create GeoDataFrame using long/lat points
-gdf_broadband_points = gpd.GeoDataFrame(
-    df_broadband,
-    geometry=gpd.points_from_xy(df_broadband["long"], df_broadband["lat"]),
-    crs="EPSG:4326",
+# 5. Merge Mobile Summary with Provider Summary on 'geography_id'
+print("Merging Mobile Summary with Provider Summary on 'geography_id'...")
+merged_df = pd.merge(
+    df_mobile_trimmed, 
+    df_provider_summary_trimmed, 
+    on='geography_id', 
+    how='left'
 )
 
-print("Performing spatial join with buffered town boundaries...")
-gdf_joined = gpd.sjoin(
-    gdf_broadband_points, gdf_geog, how="inner", predicate="within"
-)
+# 6. Filter rows for specific towns: Cuba, Chama, Bloomfield, Taos
+target_towns = ['cuba', 'chama', 'bloomfield', 'taos']
+pattern = '|'.join(target_towns)
 
-# Clean up geometry column for final output table
-df_final = pd.DataFrame(
-    gdf_joined.drop(columns=["geometry"], errors="ignore")
-)
+if 'geography_desc' in merged_df.columns:
+    print("Filtering rows for Cuba, Chama, Bloomfield, and Taos...")
+    merged_df = merged_df[merged_df['geography_desc'].astype(str).str.contains(pattern, case=False, na=False)]
+else:
+    raise ValueError("The 'geography_desc' column is missing from the mobile summary dataset, which is required for filtering towns.")
 
-found_towns = (
-    df_final["NAME"].unique() if not df_final.empty else []
-)
-print("\nTowns successfully matched in final merged dataset:", found_towns)
-print(f"Total matching provider-location rows merged: {len(df_final)}")
+# 7. Merge with US Provider List using 'provider_id' to pull in the provider/holding company name
+name_col = 'holding_company' if 'holding_company' in df_provider_list.columns else 'provider'
 
-# Save the fully merged dataset containing the provider names
-output_final_path = (
-    r"C:\Users\zack\Documents\ECE220\Project\broadband_merged_with_census_places.csv"
-)
-df_final.to_csv(output_final_path, index=False)
-print(f"Success! Fully merged dataset saved to {output_final_path}")
+if 'provider_id' in df_provider_list.columns and name_col in df_provider_list.columns:
+    print(f"Merging with US Provider List using '{name_col}'...")
+    df_provider_list_trimmed = df_provider_list[['provider_id', name_col]]
+    
+    merged_df = pd.merge(
+        merged_df, 
+        df_provider_list_trimmed, 
+        on='provider_id', 
+        how='left'
+    )
+else:
+    raise ValueError(f"Could not find 'provider_id' or '{name_col}' in the provider list file.")
+
+# 8. Reorder key columns upfront
+front_cols = [col for col in ['geography_id', 'geography_desc', 'provider_id', name_col] if col in merged_df.columns]
+remaining_cols = [col for col in merged_df.columns if col not in front_cols]
+final_df = merged_df[front_cols + remaining_cols]
+
+# 9. Save directly as a plain CSV file
+final_df.to_csv(output_csv_path, index=False)
+
+print(f"\nSuccessfully processed, filtered, and merged all datasets!")
+print(f"Saved output CSV file to: {output_csv_path}")
+
+# ==========================================
+# 10. POST-PROCESSING CONTENT INSPECTION
+# ==========================================
+print("\n" + "="*40)
+print("POST-PROCESSING CONTENT INSPECTION")
+print("="*40)
+print(f"Total Rows: {len(final_df)}")
+print(f"Total Columns: {len(final_df.columns)}")
+print("\nFinal Column Names:")
+print(final_df.columns.tolist())
+print("\nFirst 5 Rows Preview:")
+print(final_df.head())

@@ -1,0 +1,14 @@
+import geopandas as gpd
+
+# Point directly to the extracted .shp file
+shapefile_path = r"C:\Users\zack\Documents\ECE220\Project\your_extracted_folder\your_file.shp"
+
+print("Reading ESRI shapefile...")
+gdf = gpd.read_file(shapefile_path)
+
+# Drop the geometry column and export to CSV 
+df_csv = gdf.drop(columns='geometry', errors='ignore')
+output_csv_path = r"C:\Users\zack\Documents\ECE220\Project\output_data.csv"
+df_csv.to_csv(output_csv_path, index=False)
+
+print(f"Successfully converted to CSV at: {output_csv_path}")
